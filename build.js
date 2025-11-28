@@ -267,7 +267,7 @@ const indexHtml = `
         }
         .tree-view {
             width: 100%;
-            max-width: 800px;
+            /* max-width: 800px; Removed to fill screen */
             background: white;
             border-radius: 12px;
             padding: 1rem 0; /* Remove horizontal padding for full-width lines */
@@ -346,15 +346,17 @@ const indexHtml = `
             justify-content: center;
             align-items: center;
             background-color: #f8f9fa;
+            box-sizing: border-box;
         }
         iframe {
-            width: 95%;
-            height: 95%;
+            width: 100%;
+            height: 100%;
             border: 1px solid #e9ecef;
             display: block;
             border-radius: 16px;
             box-shadow: 0 4px 12px rgba(0,0,0,0.1);
             background: white;
+            box-sizing: border-box;
         }
     </style>
 </head>

@@ -14,13 +14,137 @@ if (!fs.existsSync(MOLECULES_DIR)) {
 // Read viewer template
 let viewerHtml = fs.readFileSync(VIEWER_TEMPLATE, 'utf8');
 
-// Get all .xyz files
-const molecules = fs.readdirSync(MOLECULES_DIR)
-    .filter(file => file.endsWith('.xyz'))
-    .map(file => file.replace('.xyz', ''));
+// Extract comment from XYZ file (2nd line)
+function extractComment(filePath) {
+    try {
+        const lines = fs.readFileSync(filePath, 'utf8').split('\n');
+        return lines.length >= 2 ? lines[1].trim() : '';
+    } catch (err) {
+        console.error(`Error reading ${filePath}:`, err.message);
+        return '';
+    }
+}
 
-console.log(`Found ${molecules.length} molecules:`, molecules);
+// Recursively scan molecules directory
+function getMoleculesRecursive(dir, basePath = '') {
+    const molecules = [];
+    const entries = fs.readdirSync(dir, { withFileTypes: true });
 
+    for (const entry of entries) {
+        const fullPath = path.join(dir, entry.name);
+        const relativePath = basePath ? `${basePath}/${entry.name}` : entry.name;
+
+        if (entry.isDirectory()) {
+            molecules.push(...getMoleculesRecursive(fullPath, relativePath));
+        } else if (entry.name.endsWith('.xyz')) {
+            const comment = extractComment(fullPath);
+            const name = relativePath.replace('.xyz', '');
+            molecules.push({ name, comment, path: relativePath });
+        }
+    }
+
+    return molecules;
+}
+
+// Build hierarchical structure from flat molecule list
+function buildHierarchy(molecules) {
+    const root = {};
+
+    for (const mol of molecules) {
+        const parts = mol.name.split('/');
+        let current = root;
+
+        // Navigate/create folder structure
+        for (let i = 0; i < parts.length - 1; i++) {
+            const folder = parts[i];
+            if (!current[folder]) {
+                current[folder] = { _type: 'folder', _name: folder, _children: {} };
+            }
+            current = current[folder]._children;
+        }
+
+        // Add file at leaf
+        const fileName = parts[parts.length - 1];
+        current[fileName] = {
+            _type: 'file',
+            _name: fileName,
+            name: mol.name,
+            comment: mol.comment
+        };
+    }
+
+    return root;
+}
+
+// Get all .xyz files recursively
+const molecules = getMoleculesRecursive(MOLECULES_DIR);
+const hierarchy = buildHierarchy(molecules);
+
+console.log(`Found ${molecules.length} molecules:`, molecules.map(m => m.name));
+
+// Render tree HTML recursively
+function renderTree(node, depth = 0) {
+    let html = '';
+    const entries = Object.entries(node).sort((a, b) => {
+        // Folders first, then files
+        const aIsFolder = a[1]._type === 'folder';
+        const bIsFolder = b[1]._type === 'folder';
+        if (aIsFolder && !bIsFolder) return -1;
+        if (!aIsFolder && bIsFolder) return 1;
+        return a[0].localeCompare(b[0]);
+    });
+
+    // Indentation spacer
+    const indent = `<span class="tree-indent" style="width: ${depth * 24}px"></span>`;
+
+    for (const [key, value] of entries) {
+        if (value._type === 'folder') {
+            html += `
+                <div class="tree-folder-container">
+                    <div class="tree-row" onclick="toggleFolder(this)">
+                        ${indent}
+                        <div class="toggle-arrow">
+                            <svg viewBox="0 0 24 24" fill="currentColor">
+                                <path d="M8 5v14l11-7z"/>
+                            </svg>
+                        </div>
+                        <div class="row-icon">
+                            <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor">
+                                <path d="M20 6h-8l-2-2H4c-1.1 0-1.99.9-1.99 2L2 18c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2zm0 12H4V8h16v10z"/>
+                            </svg>
+                        </div>
+                        <span class="row-name">${value._name}</span>
+                    </div>
+                    <div class="folder-content">
+                        ${renderTree(value._children, depth + 1)}
+                    </div>
+                </div>
+            `;
+        } else if (value._type === 'file') {
+            html += `
+                <div class="tree-row" onclick="selectMolecule('${value.name}')">
+                    ${indent}
+                    <div class="toggle-arrow"></div> <!-- Spacer for alignment -->
+                    <div class="row-icon">
+                        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+                            <polyline points="14 2 14 8 20 8"></polyline>
+                            <line x1="16" y1="13" x2="8" y2="13"></line>
+                            <line x1="16" y1="17" x2="8" y2="17"></line>
+                            <polyline points="10 9 9 9 8 9"></polyline>
+                        </svg>
+                    </div>
+                    <span class="row-name">${value._name}</span>
+                    ${value.comment ? `<span class="row-comment">${value.comment}</span>` : ''}
+                </div>
+            `;
+        }
+    }
+
+    return html;
+}
+
+const treeHtml = renderTree(hierarchy);
 
 
 // 2. Generate Index Page with Hybrid List/Viewer Layout
@@ -141,53 +265,77 @@ const indexHtml = `
             flex-direction: column;
             align-items: center;
         }
-        .molecule-grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
-            gap: 1.5rem;
+        .tree-view {
             width: 100%;
-            max-width: 1200px;
-        }
-        .molecule-card {
+            /* max-width: 800px; Removed to fill screen */
             background: white;
             border-radius: 12px;
-            padding: 1.5rem;
+            padding: 1rem 0; /* Remove horizontal padding for full-width lines */
             box-shadow: 0 4px 6px rgba(0,0,0,0.05);
-            transition: transform 0.2s, box-shadow 0.2s;
-            text-decoration: none;
-            color: inherit;
+            border: 1px solid #e9ecef;
+        }
+        .tree-row {
             display: flex;
-            flex-direction: column;
             align-items: center;
-            justify-content: center;
-            border: 1px solid #eee;
+            padding: 0.75rem 1rem;
             cursor: pointer;
+            border-bottom: 1px solid #e7f5ff; /* Light blue separator */
+            transition: background 0.1s;
+            color: #495057;
         }
-        .molecule-card:hover {
-            transform: translateY(-4px);
-            box-shadow: 0 10px 15px rgba(0,0,0,0.1);
-            border-color: #dee2e6;
+        .tree-row:last-child {
+            border-bottom: none;
         }
-        .molecule-icon {
-            width: 80px;
-            height: 80px;
-            background: #f1f3f5;
-            border-radius: 50%;
-            margin-bottom: 1rem;
+        .tree-row:hover {
+            background: #f8f9fa; /* Very subtle hover */
+        }
+        .tree-indent {
+            display: inline-block;
+            width: 20px; /* Indentation unit */
+            flex-shrink: 0;
+        }
+        .toggle-arrow {
+            width: 20px;
+            height: 20px;
             display: flex;
             align-items: center;
             justify-content: center;
+            color: #adb5bd;
+            transition: transform 0.2s;
+            margin-right: 4px;
+            flex-shrink: 0;
+        }
+        .toggle-arrow svg {
+            width: 12px;
+            height: 12px;
+        }
+        .tree-row.open .toggle-arrow {
+            transform: rotate(90deg);
+        }
+        .row-icon {
+            margin-right: 8px;
+            display: flex;
+            align-items: center;
+            color: #339af0; /* Blue for folders/files */
+            flex-shrink: 0;
+        }
+        .row-name {
+            font-weight: 500;
+            flex: 1;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        .row-comment {
+            font-size: 0.85rem;
             color: #868e96;
-            transition: color 0.2s, background-color 0.2s;
+            margin-left: 1rem;
         }
-        .molecule-card:hover .molecule-icon {
-            background-color: #e7f5ff;
-            color: #339af0;
+        .folder-content {
+            display: none;
         }
-        .molecule-name {
-            font-weight: 600;
-            font-size: 1.1rem;
-            color: #343a40;
+        .folder-content.show {
+            display: block;
         }
 
         /* Viewer View Styles */
@@ -198,15 +346,17 @@ const indexHtml = `
             justify-content: center;
             align-items: center;
             background-color: #f8f9fa;
+            box-sizing: border-box;
         }
         iframe {
-            width: 95%;
-            height: 95%;
+            width: 100%;
+            height: 100%;
             border: 1px solid #e9ecef;
             display: block;
             border-radius: 16px;
             box-shadow: 0 4px 12px rgba(0,0,0,0.1);
             background: white;
+            box-sizing: border-box;
         }
     </style>
 </head>
@@ -236,7 +386,7 @@ const indexHtml = `
                 <select id="moleculeSelect" class="molecule-select" onchange="if(this.value) loadMolecule(this.value)">
                     <option value="" disabled selected>Select Molecule</option>
                     ${molecules.map(mol => `
-                    <option value="${mol}">${mol}</option>
+                    <option value="${mol.name}">${mol.name}</option>
                     `).join('')}
                 </select>
                 <div class="select-arrow">
@@ -260,22 +410,8 @@ const indexHtml = `
     <div class="main-content">
         <!-- List View -->
         <div id="viewList" class="view-list">
-            <div class="molecule-grid">
-                ${molecules.map(mol => `
-                <div class="molecule-card" onclick="selectMolecule('${mol}')">
-                    <div class="molecule-icon">
-                        <svg viewBox="0 0 24 24" width="40" height="40" stroke="currentColor" stroke-width="1.5" fill="none" stroke-linecap="round" stroke-linejoin="round">
-                            <circle cx="12" cy="12" r="10"></circle>
-                            <circle cx="12" cy="12" r="3"></circle>
-                            <line x1="12" y1="2" x2="12" y2="9"></line>
-                            <line x1="12" y1="15" x2="12" y2="22"></line>
-                            <line x1="4.93" y1="4.93" x2="9.88" y2="9.88"></line>
-                            <line x1="14.12" y1="14.12" x2="19.07" y2="19.07"></line>
-                        </svg>
-                    </div>
-                    <div class="molecule-name">${mol}</div>
-                </div>
-                `).join('')}
+            <div class="tree-view">
+                ${treeHtml}
             </div>
         </div>
 
@@ -292,6 +428,19 @@ const indexHtml = `
         const moleculeSelect = document.getElementById('moleculeSelect');
         const moleculeSelectWrapper = document.getElementById('moleculeSelectWrapper');
         const listButton = document.querySelector('.nav-btn'); 
+
+        function toggleFolder(row) {
+            // The content div is the next sibling of the row div in the container
+            const content = row.nextElementSibling;
+            
+            if (content.classList.contains('show')) {
+                content.classList.remove('show');
+                row.classList.remove('open');
+            } else {
+                content.classList.add('show');
+                row.classList.add('open');
+            }
+        } 
 
         function showList() {
             viewList.style.display = 'flex';
